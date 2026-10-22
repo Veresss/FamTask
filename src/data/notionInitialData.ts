@@ -17,13 +17,13 @@ import { getCurrentWeekDates } from '../utils/fairDistribution.ts';
 
 // 1. Family Members (7 members, strictly NO age properties)
 export const INITIAL_NOTION_MEMBERS: FamilyMember[] = [
-  { id: 'mem-anyu', name: 'Anyu', active: true, canCook: true, note: 'Tud főzni • Hétköznap általában otthon', color: '#6366f1', avatarEmoji: '👩' },
-  { id: 'mem-apu', name: 'Apu', active: true, canCook: false, note: 'Pénteken általában csak vacsorázik otthon', color: '#059669', avatarEmoji: '👨' },
-  { id: 'mem-botond', name: 'Botond', active: true, canCook: false, note: 'Változó jelenlét és étkezés', color: '#d97706', avatarEmoji: '👦' },
+  { id: 'mem-anyu', name: 'Anyu', active: true, canCook: true, note: 'Hétköznap általában otthon', color: '#6366f1', avatarEmoji: '👩' },
+  { id: 'mem-apu', name: 'Apu', active: true, canCook: true, note: 'Pénteken általában csak vacsorázik otthon', color: '#059669', avatarEmoji: '👨' },
+  { id: 'mem-botond', name: 'Botond', active: true, canCook: true, note: 'Változó jelenlét és étkezés', color: '#d97706', avatarEmoji: '👦' },
   { id: 'mem-marica', name: 'Marica', active: true, canCook: true, note: 'Tud főzni • Változó heti beosztás', color: '#ec4899', avatarEmoji: '👧' },
-  { id: 'mem-csabi', name: 'Csabi', active: true, canCook: false, note: 'Változó jelenlét és étkezés', color: '#8b5cf6', avatarEmoji: '🧑' },
-  { id: 'mem-attila', name: 'Attila', active: true, canCook: false, note: 'Általában nincs otthon, hétvégén vagy ritkábban jön haza', color: '#0ea5e9', avatarEmoji: '🧔' },
-  { id: 'mem-akos', name: 'Ákos', active: true, canCook: false, note: 'Általában otthon van', color: '#10b981', avatarEmoji: '🧒' },
+  { id: 'mem-csabi', name: 'Csabi', active: true, canCook: true, note: 'Változó jelenlét és étkezés', color: '#8b5cf6', avatarEmoji: '🧑' },
+  { id: 'mem-attila', name: 'Attila', active: true, canCook: true, note: 'Általában nincs otthon, hétvégén vagy ritkábban jön haza', color: '#0ea5e9', avatarEmoji: '🧑' },
+  { id: 'mem-akos', name: 'Ákos', active: true, canCook: true, note: 'Általában otthon van', color: '#10b981', avatarEmoji: '🧒' },
 ];
 
 // 2. 20+ Sample Recipes (15-45 perc, egészséges, családbarát, előző este elkészíthető, jól szállítható)
