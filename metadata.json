@@ -1,0 +1,6 @@
+{
+  "name": "Családi Házimunka Kiosztó",
+  "description": "Közös családi házimunka- és feladatkezelő rendszer, heti vasárnapi kiértékeléssel, archívummal és napi push értesítésekkel.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
