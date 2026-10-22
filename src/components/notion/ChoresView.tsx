@@ -7,6 +7,8 @@ import {
   ChoreAssignment,
   MemberDailyCapacity,
 } from '../../types/notion.ts';
+import { ChoreDefModal } from './ChoreDefModal.tsx';
+import { ChoreAssignmentModal } from './ChoreAssignmentModal.tsx';
 import {
   CheckSquare,
   Wand2,
@@ -19,6 +21,11 @@ import {
   Calendar,
   Layers,
   Sparkles,
+  Plus,
+  Pencil,
+  Trash2,
+  Search,
+  Filter,
 } from 'lucide-react';
 
 interface ChoresViewProps {
@@ -30,6 +37,12 @@ interface ChoresViewProps {
   onRunFairDistribution: () => void;
   onUpdateCapacity: (memberId: string, day: DayOfWeek, minutes: number) => void;
   onReassignChore: (assignmentId: string, newMemberId: string) => void;
+  onAddChoreDef?: (def: ChoreDefinition) => void;
+  onUpdateChoreDef?: (id: string, updates: Partial<ChoreDefinition>) => void;
+  onDeleteChoreDef?: (id: string) => void;
+  onAddAssignment?: (asgn: ChoreAssignment) => void;
+  onUpdateAssignment?: (id: string, updates: Partial<ChoreAssignment>) => void;
+  onDeleteAssignment?: (id: string) => void;
 }
 
 export const ChoresView: React.FC<ChoresViewProps> = ({
@@ -41,10 +54,27 @@ export const ChoresView: React.FC<ChoresViewProps> = ({
   onRunFairDistribution,
   onUpdateCapacity,
   onReassignChore,
+  onAddChoreDef,
+  onUpdateChoreDef,
+  onDeleteChoreDef,
+  onAddAssignment,
+  onUpdateAssignment,
+  onDeleteAssignment,
 }) => {
   const [activeTab, setActiveTab] = useState<'assignments' | 'capacity' | 'catalog'>('assignments');
   const [selectedDayFilter, setSelectedDayFilter] = useState<string>('all');
   const [justDistributedToast, setJustDistributedToast] = useState(false);
+
+  // Catalog filters & search
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogFreqFilter, setCatalogFreqFilter] = useState('all');
+
+  // Modals state
+  const [isChoreDefModalOpen, setIsChoreDefModalOpen] = useState(false);
+  const [editingChoreDef, setEditingChoreDef] = useState<ChoreDefinition | null>(null);
+
+  const [isAssignmentModalOpen, setIsAssignmentModalOpen] = useState(false);
+  const [editingAssignment, setEditingAssignment] = useState<ChoreAssignment | null>(null);
 
   const handleRunAlgorithm = () => {
     onRunFairDistribution();
@@ -60,6 +90,15 @@ export const ChoresView: React.FC<ChoresViewProps> = ({
   const filteredAssignments = selectedDayFilter === 'all'
     ? assignments
     : assignments.filter((a) => a.dayOfWeek === selectedDayFilter);
+
+  const filteredCatalog = choreDefs.filter((def) => {
+    const matchesSearch =
+      def.title.toLowerCase().includes(catalogSearch.toLowerCase()) ||
+      def.roomArea.toLowerCase().includes(catalogSearch.toLowerCase()) ||
+      (def.note && def.note.toLowerCase().includes(catalogSearch.toLowerCase()));
+    const matchesFreq = catalogFreqFilter === 'all' || def.frequency === catalogFreqFilter;
+    return matchesSearch && matchesFreq;
+  });
 
   const completedCount = assignments.filter((a) => a.completed).length;
   const totalCount = assignments.length;
@@ -78,13 +117,28 @@ export const ChoresView: React.FC<ChoresViewProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={handleRunAlgorithm}
-          className="px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 shadow-xs cursor-pointer transition-all self-start active:scale-95"
-        >
-          <Wand2 className="w-4 h-4" />
-          <span>⚖️ Igazságos Beosztás Újraszámolása</span>
-        </button>
+        <div className="flex items-center gap-2 self-start flex-wrap">
+          {onAddAssignment && (
+            <button
+              onClick={() => {
+                setEditingAssignment(null);
+                setIsAssignmentModalOpen(true);
+              }}
+              className="px-3 py-2 rounded-md bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-800 text-xs font-bold flex items-center gap-1.5 shadow-2xs cursor-pointer transition-all"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Feladat Kiosztása</span>
+            </button>
+          )}
+
+          <button
+            onClick={handleRunAlgorithm}
+            className="px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 shadow-xs cursor-pointer transition-all active:scale-95"
+          >
+            <Wand2 className="w-4 h-4" />
+            <span>⚖️ Igazságos Beosztás Újraszámolása</span>
+          </button>
+        </div>
       </div>
 
       {justDistributedToast && (
@@ -135,7 +189,7 @@ export const ChoresView: React.FC<ChoresViewProps> = ({
                 : 'border-transparent text-slate-400 hover:text-slate-700'
             }`}
           >
-            🗂️ Feladatok Törzsadatai (7 Napi, 20 Heti, Havi)
+            🗂️ Feladatok Katalógusa ({choreDefs.length} tétel)
           </button>
         </div>
       </div>
@@ -145,7 +199,7 @@ export const ChoresView: React.FC<ChoresViewProps> = ({
         <div className="space-y-4">
           {/* Day Filter */}
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-1 bg-[#efefed] p-1 rounded-md border border-[#e2e2e0]">
+            <div className="flex items-center gap-1 bg-[#efefed] p-1 rounded-md border border-[#e2e2e0] overflow-x-auto">
               <button
                 onClick={() => setSelectedDayFilter('all')}
                 className={`px-3 py-1 rounded font-semibold cursor-pointer ${
@@ -158,42 +212,48 @@ export const ChoresView: React.FC<ChoresViewProps> = ({
                 <button
                   key={d}
                   onClick={() => setSelectedDayFilter(d)}
-                  className={`px-2 py-1 rounded font-semibold cursor-pointer ${
-                    selectedDayFilter === d ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+                  className={`px-2.5 py-1 rounded font-medium cursor-pointer ${
+                    selectedDayFilter === d ? 'bg-white text-slate-900 shadow-2xs font-bold' : 'text-slate-600'
                   }`}
                 >
-                  {d.substring(0, 2)}
+                  {d}
                 </button>
               ))}
             </div>
 
-            <span className="text-slate-400 text-xs">
-              Kattints a karikára a feladat készre jelöléséhez
-            </span>
+            {onAddAssignment && (
+              <button
+                onClick={() => {
+                  setEditingAssignment(null);
+                  setIsAssignmentModalOpen(true);
+                }}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-xs font-semibold text-slate-700 flex items-center gap-1 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Új feladat a héthez</span>
+              </button>
+            )}
           </div>
 
-          {/* Assignments Table / List */}
-          <div className="overflow-hidden rounded-lg border border-[#e9e9e7] bg-white shadow-2xs divide-y divide-[#efefed]">
+          {/* Assignments List */}
+          <div className="bg-white rounded-lg border border-[#e9e9e7] divide-y divide-[#efefed] shadow-2xs">
             {filteredAssignments.map((asgn) => {
               const assignedMember = members.find((m) => m.id === asgn.memberId);
 
               return (
                 <div
                   key={asgn.id}
-                  className={`p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition-colors ${
-                    asgn.completed ? 'bg-slate-50/70 text-slate-400' : 'hover:bg-[#fafaf9]'
-                  }`}
+                  className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#fafaf9] transition-colors"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <button
                       onClick={() => onToggleAssignmentComplete(asgn.id)}
-                      className="cursor-pointer text-slate-400 hover:text-emerald-600 shrink-0"
-                      title={asgn.completed ? 'Visszavonás' : 'Készre jelölés'}
+                      className="cursor-pointer text-slate-400 hover:text-emerald-600 transition-colors shrink-0"
                     >
                       {asgn.completed ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                       ) : (
-                        <Circle className="w-4 h-4 text-slate-300" />
+                        <Circle className="w-5 h-5 text-slate-300" />
                       )}
                     </button>
 
@@ -204,10 +264,13 @@ export const ChoresView: React.FC<ChoresViewProps> = ({
                       <span className="ml-2 text-[10px] text-slate-400 font-mono">
                         ({asgn.roomArea} • {asgn.estimatedMinutes} perc)
                       </span>
+                      {asgn.note && (
+                        <span className="block text-[10px] text-slate-400 italic">{asgn.note}</span>
+                      )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+                  <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
                     <span className="text-[11px] font-mono text-slate-500 bg-[#f7f7f5] px-2 py-0.5 rounded">
                       {asgn.dayOfWeek} • {asgn.deadline}
                     </span>
@@ -224,10 +287,44 @@ export const ChoresView: React.FC<ChoresViewProps> = ({
                         </option>
                       ))}
                     </select>
+
+                    {/* Edit & Delete if provided */}
+                    {onUpdateAssignment && (
+                      <button
+                        onClick={() => {
+                          setEditingAssignment(asgn);
+                          setIsAssignmentModalOpen(true);
+                        }}
+                        className="p-1 rounded text-slate-400 hover:text-indigo-600 hover:bg-slate-100 cursor-pointer"
+                        title="Beosztás szerkesztése"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    {onDeleteAssignment && (
+                      <button
+                        onClick={() => {
+                          if (confirm(`Biztosan törlöd a "${asgn.choreTitle}" feladatot?`)) {
+                            onDeleteAssignment(asgn.id);
+                          }
+                        }}
+                        className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-slate-100 cursor-pointer"
+                        title="Beosztás törlése"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
             })}
+
+            {filteredAssignments.length === 0 && (
+              <div className="p-8 text-center text-xs text-slate-400">
+                Nincs megjeleníthető feladat az adott napon.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -291,37 +388,168 @@ export const ChoresView: React.FC<ChoresViewProps> = ({
 
       {/* TAB 3: Chore Definitions Catalog */}
       {activeTab === 'catalog' && (
-        <div className="space-y-3">
-          <p className="text-xs text-slate-600">
-            A rendszerben rögzített feladatok listája helyiségek és gyakoriság (Napi, Heti, Havi, Szezonális) szerint.
-          </p>
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#fbfbfa] p-3 rounded-lg border border-[#e9e9e7]">
+            <div className="flex items-center gap-2 flex-1 max-w-sm">
+              <Search className="w-4 h-4 text-slate-400 shrink-0" />
+              <input
+                type="text"
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Keresés a katalógusban..."
+                className="w-full px-2.5 py-1 text-xs border border-slate-300 rounded bg-white focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <select
+                value={catalogFreqFilter}
+                onChange={(e) => setCatalogFreqFilter(e.target.value)}
+                className="px-2.5 py-1 text-xs border border-slate-300 rounded bg-white cursor-pointer font-medium"
+              >
+                <option value="all">Minden gyakoriság</option>
+                <option value="napi">Napi</option>
+                <option value="heti">Heti</option>
+                <option value="havi">Havi</option>
+                <option value="2-3 havi">2-3 havi</option>
+                <option value="szezonális">Szezonális</option>
+              </select>
+
+              {onAddChoreDef && (
+                <button
+                  onClick={() => {
+                    setEditingChoreDef(null);
+                    setIsChoreDefModalOpen(true);
+                  }}
+                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Új feladat hozzáadása</span>
+                </button>
+              )}
+            </div>
+          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {choreDefs.map((def) => (
-              <div key={def.id} className="p-3 rounded-lg border border-[#e9e9e7] bg-white shadow-2xs space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-900 text-xs">{def.title}</span>
-                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                    def.frequency === 'napi'
-                      ? 'bg-amber-100 text-amber-800'
-                      : def.frequency === 'heti'
-                      ? 'bg-indigo-100 text-indigo-800'
-                      : 'bg-slate-100 text-slate-700'
-                  }`}>
-                    {def.frequency}
-                  </span>
+            {filteredCatalog.map((def) => (
+              <div
+                key={def.id}
+                className={`p-3.5 rounded-lg border bg-white shadow-2xs space-y-1.5 transition-all ${
+                  def.isActive ? 'border-[#e9e9e7]' : 'border-slate-200 bg-slate-50/70 opacity-60'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-900 text-xs">{def.title}</span>
+                    {!def.isActive && (
+                      <span className="px-1.5 py-0.2 rounded text-[9px] bg-rose-100 text-rose-700 font-bold">
+                        Inaktív
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        def.frequency === 'napi'
+                          ? 'bg-amber-100 text-amber-800'
+                          : def.frequency === 'heti'
+                          ? 'bg-indigo-100 text-indigo-800'
+                          : 'bg-slate-100 text-slate-700'
+                      }`}
+                    >
+                      {def.frequency}
+                    </span>
+
+                    {/* Edit & Delete actions */}
+                    {onUpdateChoreDef && (
+                      <button
+                        onClick={() => {
+                          setEditingChoreDef(def);
+                          setIsChoreDefModalOpen(true);
+                        }}
+                        className="p-1 text-slate-400 hover:text-indigo-600 cursor-pointer"
+                        title="Feladat szerkesztése"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    {onDeleteChoreDef && (
+                      <button
+                        onClick={() => {
+                          if (confirm(`Biztosan törlöd a "${def.title}" feladatot a katalógusból?`)) {
+                            onDeleteChoreDef(def.id);
+                          }
+                        }}
+                        className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
+                        title="Feladat törlése"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
+
                 <div className="flex items-center justify-between text-[11px] text-slate-500">
-                  <span>Helyiség: <strong>{def.roomArea}</strong></span>
+                  <span>
+                    Helyiség: <strong>{def.roomArea}</strong>
+                  </span>
                   <span className="font-mono">Becsült idő: {def.estimatedMinutes} perc</span>
                 </div>
+
                 {def.note && (
-                  <p className="text-[10px] text-slate-400 italic pt-1">{def.note}</p>
+                  <p className="text-[10px] text-slate-400 italic pt-0.5">{def.note}</p>
                 )}
               </div>
             ))}
           </div>
+
+          {filteredCatalog.length === 0 && (
+            <div className="p-8 text-center text-xs text-slate-400 bg-white border border-slate-200 rounded-lg">
+              Nincs találat a keresési feltételeknek megfelelően.
+            </div>
+          )}
         </div>
+      )}
+
+      {/* Shared Modals */}
+      {onAddChoreDef && onUpdateChoreDef && (
+        <ChoreDefModal
+          isOpen={isChoreDefModalOpen}
+          onClose={() => {
+            setIsChoreDefModalOpen(false);
+            setEditingChoreDef(null);
+          }}
+          initialChoreDef={editingChoreDef}
+          onSave={(savedDef) => {
+            if (editingChoreDef) {
+              onUpdateChoreDef(savedDef.id, savedDef);
+            } else {
+              onAddChoreDef(savedDef);
+            }
+          }}
+        />
+      )}
+
+      {onAddAssignment && onUpdateAssignment && (
+        <ChoreAssignmentModal
+          isOpen={isAssignmentModalOpen}
+          onClose={() => {
+            setIsAssignmentModalOpen(false);
+            setEditingAssignment(null);
+          }}
+          initialAssignment={editingAssignment}
+          members={members}
+          choreDefs={choreDefs}
+          onSave={(savedAsgn) => {
+            if (editingAssignment) {
+              onUpdateAssignment(savedAsgn.id, savedAsgn);
+            } else {
+              onAddAssignment(savedAsgn);
+            }
+          }}
+        />
       )}
     </div>
   );

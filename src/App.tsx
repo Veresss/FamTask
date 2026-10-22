@@ -12,6 +12,8 @@ import {
   ChoreAssignment,
   MemberDailyCapacity,
 } from './types/notion.ts';
+import { AuthUser, isCsabiUser } from './types/auth.ts';
+import { authService } from './services/authService.ts';
 import {
   INITIAL_NOTION_MEMBERS,
   INITIAL_NOTION_RECIPES,
@@ -38,6 +40,9 @@ import { MobileTodayView } from './components/notion/MobileTodayView.tsx';
 import { FamilyMembersView } from './components/notion/FamilyMembersView.tsx';
 import { PantryView } from './components/notion/PantryView.tsx';
 import { WeeklyOverviewView } from './components/notion/WeeklyOverviewView.tsx';
+import { AdminView } from './components/notion/AdminView.tsx';
+import { AuthModal } from './components/auth/AuthModal.tsx';
+import { FamilyMemberPickerModal } from './components/auth/FamilyMemberPickerModal.tsx';
 
 // Storage keys
 const STORAGE_PREFIX = 'notion_home_v2_';
@@ -48,9 +53,18 @@ export default function App() {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [selectedRecipeModal, setSelectedRecipeModal] = useState<Recipe | null>(null);
 
+  // Authentication State
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => authService.getCurrentUser());
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(() => !authService.getCurrentUser());
+  const [isMemberPickerOpen, setIsMemberPickerOpen] = useState<boolean>(false);
+
   // Active Member for Personal Filtering
   const [activeMemberId, setActiveMemberId] = useState<string>(() => {
-    return localStorage.getItem(`${STORAGE_PREFIX}active_member`) || 'mem-anyu';
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}active_member`);
+    if (saved) return saved;
+    const initialUser = authService.getCurrentUser();
+    if (initialUser?.linkedMemberId) return initialUser.linkedMemberId;
+    return 'mem-csabi';
   });
 
   // 1. Family Members (7 members, strictly no age)
@@ -101,7 +115,7 @@ export default function App() {
     return saved ? JSON.parse(saved) : INITIAL_NOTION_PANTRY;
   });
 
-  // 9. Chore Definitions
+  // 9. Chore Definitions (Customizable Master Task Catalog)
   const [choreDefs, setChoreDefs] = useState<ChoreDefinition[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_PREFIX}chore_defs`);
     return saved ? JSON.parse(saved) : INITIAL_NOTION_CHORE_DEFS;
@@ -120,6 +134,13 @@ export default function App() {
       weekDates: getCurrentWeekDates(),
     });
   });
+
+  // Sync activeMemberId with currentUser if linked
+  useEffect(() => {
+    if (currentUser?.linkedMemberId) {
+      setActiveMemberId(currentUser.linkedMemberId);
+    }
+  }, [currentUser]);
 
   // Save to LocalStorage
   useEffect(() => {
@@ -159,8 +180,52 @@ export default function App() {
   }, [pantryItems]);
 
   useEffect(() => {
+    localStorage.setItem(`${STORAGE_PREFIX}chore_defs`, JSON.stringify(choreDefs));
+  }, [choreDefs]);
+
+  useEffect(() => {
     localStorage.setItem(`${STORAGE_PREFIX}chore_assignments`, JSON.stringify(choreAssignments));
   }, [choreAssignments]);
+
+  // ============================================================
+  // Task Customization Handlers (Chore Definitions Master Catalog)
+  // ============================================================
+  const handleAddChoreDef = (newDef: ChoreDefinition) => {
+    setChoreDefs((prev) => [newDef, ...prev]);
+  };
+
+  const handleUpdateChoreDef = (id: string, updates: Partial<ChoreDefinition>) => {
+    setChoreDefs((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, ...updates } : c))
+    );
+  };
+
+  const handleDeleteChoreDef = (id: string) => {
+    setChoreDefs((prev) => prev.filter((c) => c.id !== id));
+    // Also remove any existing assignments for this chore
+    setChoreAssignments((prev) => prev.filter((a) => a.choreId !== id));
+  };
+
+  const handleResetDefaultChoreDefs = () => {
+    setChoreDefs(INITIAL_NOTION_CHORE_DEFS);
+  };
+
+  // ============================================================
+  // Task Customization Handlers (Weekly Assignments)
+  // ============================================================
+  const handleAddAssignment = (asgn: ChoreAssignment) => {
+    setChoreAssignments((prev) => [asgn, ...prev]);
+  };
+
+  const handleUpdateAssignment = (id: string, updates: Partial<ChoreAssignment>) => {
+    setChoreAssignments((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, ...updates } : a))
+    );
+  };
+
+  const handleDeleteAssignment = (id: string) => {
+    setChoreAssignments((prev) => prev.filter((a) => a.id !== id));
+  };
 
   // Global Actions
   const handleRunFairDistribution = () => {
@@ -365,6 +430,35 @@ export default function App() {
     });
   };
 
+  // Auth Handlers
+  const handleAuthSuccess = (user: AuthUser, needsMemberSelection?: boolean) => {
+    setCurrentUser(user);
+    setIsAuthModalOpen(false);
+
+    if (needsMemberSelection || !user.linkedMemberId) {
+      setIsMemberPickerOpen(true);
+    } else {
+      setActiveMemberId(user.linkedMemberId);
+    }
+  };
+
+  const handleSelectFamilyMember = (memberId: string) => {
+    if (currentUser) {
+      const updated = authService.linkUserToMember(currentUser.id, memberId);
+      if (updated) {
+        setCurrentUser(updated);
+      }
+    }
+    setActiveMemberId(memberId);
+    setIsMemberPickerOpen(false);
+  };
+
+  const handleLogout = () => {
+    authService.logout();
+    setCurrentUser(null);
+    setIsAuthModalOpen(true);
+  };
+
   const activeMember = members.find((m) => m.id === activeMemberId) || members[0];
 
   const pageTitles: Record<NotionPageId, { title: string; icon: string }> = {
@@ -380,6 +474,7 @@ export default function App() {
     pantry: { title: 'Háztartási Készlet', icon: '📦' },
     mobile_today: { title: 'MA — Mobil Fókusz', icon: '📱' },
     family_members: { title: 'Családtagok (7 fő)', icon: '👨‍👩‍👧‍👦' },
+    admin: { title: 'Adminisztrációs Központ (Csabi)', icon: '⚙️' },
   };
 
   return (
@@ -391,6 +486,10 @@ export default function App() {
         isOpenMobile={isMobileSidebarOpen}
         onToggleMobile={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
         selectedMemberName={activeMember.name}
+        currentUser={currentUser}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onOpenMemberPicker={() => setIsMemberPickerOpen(true)}
+        onLogout={handleLogout}
       />
 
       {/* Main Content Area */}
@@ -403,6 +502,11 @@ export default function App() {
           members={members}
           activeMemberId={activeMemberId}
           onSelectMember={setActiveMemberId}
+          currentUser={currentUser}
+          onOpenAuthModal={() => setIsAuthModalOpen(true)}
+          onOpenMemberPicker={() => setIsMemberPickerOpen(true)}
+          onLogout={handleLogout}
+          onNavigateToAdmin={() => setActivePage('admin')}
           onApplyDefaults={handleApplyDefaults}
           onRunFairDistribution={handleRunFairDistribution}
           onGenerateShoppingList={handleGenerateShoppingListFromMenu}
@@ -499,6 +603,12 @@ export default function App() {
               onRunFairDistribution={handleRunFairDistribution}
               onUpdateCapacity={handleUpdateCapacity}
               onReassignChore={handleReassignChore}
+              onAddChoreDef={handleAddChoreDef}
+              onUpdateChoreDef={handleUpdateChoreDef}
+              onDeleteChoreDef={handleDeleteChoreDef}
+              onAddAssignment={handleAddAssignment}
+              onUpdateAssignment={handleUpdateAssignment}
+              onDeleteAssignment={handleDeleteAssignment}
             />
           )}
 
@@ -550,8 +660,57 @@ export default function App() {
               onSendLowStockToShopping={handleSendPantryToShopping}
             />
           )}
+
+          {activePage === 'admin' && (
+            <AdminView
+              currentUser={currentUser}
+              members={members}
+              choreDefs={choreDefs}
+              assignments={choreAssignments}
+              onAddChoreDef={handleAddChoreDef}
+              onUpdateChoreDef={handleUpdateChoreDef}
+              onDeleteChoreDef={handleDeleteChoreDef}
+              onResetDefaultChoreDefs={handleResetDefaultChoreDefs}
+              onAddAssignment={handleAddAssignment}
+              onUpdateAssignment={handleUpdateAssignment}
+              onDeleteAssignment={handleDeleteAssignment}
+              onRunFairDistribution={handleRunFairDistribution}
+              onToggleCanCook={handleToggleCanCook}
+              onToggleMemberActive={handleToggleMemberActive}
+              onUpdateMemberNote={handleUpdateMemberNote}
+              onSwitchToCsabi={() => {
+                const res = authService.loginWithGoogle({
+                  email: 'csabi.csalad@gmail.com',
+                  name: 'Csabi',
+                  memberId: 'mem-csabi',
+                });
+                setCurrentUser(res.user);
+                setActiveMemberId('mem-csabi');
+              }}
+              onNavigateHome={() => setActivePage('home')}
+            />
+          )}
         </main>
       </div>
+
+      {/* Auth Modal (shown on top when user is not authenticated or manually opened) */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onSuccess={handleAuthSuccess}
+        members={members}
+        onClose={() => setIsAuthModalOpen(false)}
+        canDismiss={currentUser !== null}
+      />
+
+      {/* Family Member Picker Modal (onboarding to choose family identity) */}
+      <FamilyMemberPickerModal
+        isOpen={isMemberPickerOpen}
+        currentUser={currentUser}
+        members={members}
+        onSelectMember={handleSelectFamilyMember}
+        onClose={() => setIsMemberPickerOpen(false)}
+        isMandatory={currentUser !== null && !currentUser.linkedMemberId}
+      />
     </div>
   );
 }
