@@ -1,512 +1,557 @@
 import React, { useState, useEffect } from 'react';
-import { FamilyMember, Chore, WeeklyEvaluation, InAppNotification } from './types/index.ts';
-import { INITIAL_MEMBERS, INITIAL_CHORES, INITIAL_EVALUATIONS } from './data/initialData.ts';
-import { getWeekId, isSunday, filterChores, generateDailyNotificationMessage } from './utils/rules.ts';
-import { Header } from './components/Header.tsx';
-import { FamilySummaryBanner } from './components/FamilySummaryBanner.tsx';
-import { ChoreCard } from './components/ChoreCard.tsx';
-import { ChoreModal } from './components/ChoreModal.tsx';
-import { MemberManagementModal } from './components/MemberManagementModal.tsx';
-import { SundayEvaluationModal } from './components/SundayEvaluationModal.tsx';
-import { PushNotificationModal } from './components/PushNotificationModal.tsx';
-import { InAppNotificationToast } from './components/InAppNotificationToast.tsx';
-import { sendBrowserNotification, playChimeSound } from './services/notificationService.ts';
 import {
-  Users,
-  Plus,
-  Trophy,
-  Bell,
-  CheckCircle2,
-  Calendar,
-  Sparkles,
-  Inbox,
-  UserCheck,
-} from 'lucide-react';
+  DayOfWeek,
+  FamilyMember,
+  PresenceRecord,
+  MealAttendanceRecord,
+  Recipe,
+  WeeklyMealPlanItem,
+  ShoppingItem,
+  PantryItem,
+  ChoreDefinition,
+  ChoreAssignment,
+  MemberDailyCapacity,
+} from './types/notion.ts';
+import {
+  INITIAL_NOTION_MEMBERS,
+  INITIAL_NOTION_RECIPES,
+  INITIAL_NOTION_CHORE_DEFS,
+  INITIAL_NOTION_SHOPPING,
+  INITIAL_NOTION_PANTRY,
+  generateInitialPresence,
+  generateInitialMealAttendances,
+  generateInitialCapacities,
+  generateInitialMealPlan,
+} from './data/notionInitialData.ts';
+import { getCurrentWeekDates, distributeChoresFairly } from './utils/fairDistribution.ts';
+import { NotionSidebar, NotionPageId } from './components/notion/NotionSidebar.tsx';
+import { NotionHeader } from './components/notion/NotionHeader.tsx';
+import { DashboardView } from './components/notion/DashboardView.tsx';
+import { PresenceMatrixView } from './components/notion/PresenceMatrixView.tsx';
+import { MealAttendanceView } from './components/notion/MealAttendanceView.tsx';
+import { MealPlanAndCookingView } from './components/notion/MealPlanAndCookingView.tsx';
+import { RecipeDatabaseView } from './components/notion/RecipeDatabaseView.tsx';
+import { ShoppingListView } from './components/notion/ShoppingListView.tsx';
+import { ChoresView } from './components/notion/ChoresView.tsx';
+import { PersonalView } from './components/notion/PersonalView.tsx';
+import { MobileTodayView } from './components/notion/MobileTodayView.tsx';
+import { FamilyMembersView } from './components/notion/FamilyMembersView.tsx';
+import { PantryView } from './components/notion/PantryView.tsx';
+import { WeeklyOverviewView } from './components/notion/WeeklyOverviewView.tsx';
 
-const STORAGE_KEY_MEMBERS = 'csalad_hazimunka_members_v1';
-const STORAGE_KEY_CHORES = 'csalad_hazimunka_chores_v1';
-const STORAGE_KEY_EVALUATIONS = 'csalad_hazimunka_evals_v1';
-const STORAGE_KEY_NAME = 'csalad_hazimunka_name_v1';
+// Storage keys
+const STORAGE_PREFIX = 'notion_home_v2_';
 
 export default function App() {
-  // State with LocalStorage fallbacks
-  const [familyName, setFamilyName] = useState<string>(() => {
-    return localStorage.getItem(STORAGE_KEY_NAME) || 'Kovács Család';
+  // Navigation State
+  const [activePage, setActivePage] = useState<NotionPageId>('home');
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [selectedRecipeModal, setSelectedRecipeModal] = useState<Recipe | null>(null);
+
+  // Active Member for Personal Filtering
+  const [activeMemberId, setActiveMemberId] = useState<string>(() => {
+    return localStorage.getItem(`${STORAGE_PREFIX}active_member`) || 'mem-anyu';
   });
 
+  // 1. Family Members (7 members, strictly no age)
   const [members, setMembers] = useState<FamilyMember[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_MEMBERS);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        // fallback
-      }
-    }
-    return INITIAL_MEMBERS;
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}members`);
+    return saved ? JSON.parse(saved) : INITIAL_NOTION_MEMBERS;
   });
 
-  const [chores, setChores] = useState<Chore[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_CHORES);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        // fallback
-      }
-    }
-    return INITIAL_CHORES;
+  // 2. Presence
+  const [presence, setPresence] = useState<PresenceRecord[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}presence`);
+    return saved ? JSON.parse(saved) : generateInitialPresence();
   });
 
-  const [evaluations, setEvaluations] = useState<WeeklyEvaluation[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_EVALUATIONS);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        // fallback
-      }
-    }
-    return INITIAL_EVALUATIONS;
+  // 3. Meal Attendance
+  const [mealAttendances, setMealAttendances] = useState<MealAttendanceRecord[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}meal_attendance`);
+    return saved ? JSON.parse(saved) : generateInitialMealAttendances();
   });
 
-  const [inAppNotifications, setInAppNotifications] = useState<InAppNotification[]>([
-    {
-      id: 'init-notif-1',
-      memberId: 'all',
-      title: 'Üdvözöl a Családi Házimunka Kiosztó! 👋',
-      message: 'Osszátok be a mai teendőket, pipáljátok ki ha készen vagytok, és vasárnap nézzétek meg az értékelést!',
-      timestamp: 'Ma reggel',
-      read: false,
-      type: 'daily_reminder',
-    },
-  ]);
+  // 4. Capacities
+  const [capacities, setCapacities] = useState<MemberDailyCapacity[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}capacities`);
+    return saved ? JSON.parse(saved) : generateInitialCapacities();
+  });
 
-  // View perspectives & filters
-  const [activeMemberId, setActiveMemberId] = useState<string | 'all'>('all');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('all');
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isSimulatedSunday, setIsSimulatedSunday] = useState<boolean>(false);
+  // 5. Recipes (20+)
+  const [recipes, setRecipes] = useState<Recipe[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}recipes`);
+    return saved ? JSON.parse(saved) : INITIAL_NOTION_RECIPES;
+  });
 
-  // Modals state
-  const [isChoreModalOpen, setIsChoreModalOpen] = useState(false);
-  const [isMembersModalOpen, setIsMembersModalOpen] = useState(false);
-  const [isSundayModalOpen, setIsSundayModalOpen] = useState(false);
-  const [isNotificationsModalOpen, setIsNotificationsModalOpen] = useState(false);
+  // 6. Weekly Meal Plan
+  const [mealPlan, setMealPlan] = useState<WeeklyMealPlanItem[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}meal_plan`);
+    return saved ? JSON.parse(saved) : generateInitialMealPlan();
+  });
 
-  // Sync to localStorage
+  // 7. Shopping List
+  const [shoppingList, setShoppingList] = useState<ShoppingItem[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}shopping`);
+    return saved ? JSON.parse(saved) : INITIAL_NOTION_SHOPPING;
+  });
+
+  // 8. Pantry
+  const [pantryItems, setPantryItems] = useState<PantryItem[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}pantry`);
+    return saved ? JSON.parse(saved) : INITIAL_NOTION_PANTRY;
+  });
+
+  // 9. Chore Definitions
+  const [choreDefs, setChoreDefs] = useState<ChoreDefinition[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}chore_defs`);
+    return saved ? JSON.parse(saved) : INITIAL_NOTION_CHORE_DEFS;
+  });
+
+  // 10. Chore Assignments
+  const [choreAssignments, setChoreAssignments] = useState<ChoreAssignment[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_PREFIX}chore_assignments`);
+    if (saved) return JSON.parse(saved);
+    // Generate initial fair distribution
+    return distributeChoresFairly({
+      choreDefs: INITIAL_NOTION_CHORE_DEFS,
+      members: INITIAL_NOTION_MEMBERS,
+      presence: generateInitialPresence(),
+      capacities: generateInitialCapacities(),
+      weekDates: getCurrentWeekDates(),
+    });
+  });
+
+  // Save to LocalStorage
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_NAME, familyName);
-  }, [familyName]);
+    localStorage.setItem(`${STORAGE_PREFIX}active_member`, activeMemberId);
+  }, [activeMemberId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_MEMBERS, JSON.stringify(members));
+    localStorage.setItem(`${STORAGE_PREFIX}members`, JSON.stringify(members));
   }, [members]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_CHORES, JSON.stringify(chores));
-  }, [chores]);
+    localStorage.setItem(`${STORAGE_PREFIX}presence`, JSON.stringify(presence));
+  }, [presence]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_EVALUATIONS, JSON.stringify(evaluations));
-  }, [evaluations]);
+    localStorage.setItem(`${STORAGE_PREFIX}meal_attendance`, JSON.stringify(mealAttendances));
+  }, [mealAttendances]);
 
-  const isTodaySunday = isSunday();
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_PREFIX}capacities`, JSON.stringify(capacities));
+  }, [capacities]);
 
-  // Handlers
-  const handleToggleCompleteChore = (choreId: string) => {
-    setChores((prevChores) => {
-      return prevChores.map((chore) => {
-        if (chore.id !== choreId) return chore;
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_PREFIX}recipes`, JSON.stringify(recipes));
+  }, [recipes]);
 
-        const nextCompleted = !chore.isCompleted;
-        const completedAt = nextCompleted ? new Date().toISOString() : null;
-        const completedByMemberId = nextCompleted
-          ? activeMemberId !== 'all'
-            ? activeMemberId
-            : chore.assignedMemberId
-          : null;
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_PREFIX}meal_plan`, JSON.stringify(mealPlan));
+  }, [mealPlan]);
 
-        // Recalculate points for member
-        if (chore.assignedMemberId) {
-          setMembers((prevMembers) =>
-            prevMembers.map((m) => {
-              if (m.id !== chore.assignedMemberId) return m;
-              const pointDelta = nextCompleted ? chore.points : -chore.points;
-              return {
-                ...m,
-                pointsTotal: Math.max(0, (m.pointsTotal || 0) + pointDelta),
-              };
-            })
-          );
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_PREFIX}shopping`, JSON.stringify(shoppingList));
+  }, [shoppingList]);
+
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_PREFIX}pantry`, JSON.stringify(pantryItems));
+  }, [pantryItems]);
+
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_PREFIX}chore_assignments`, JSON.stringify(choreAssignments));
+  }, [choreAssignments]);
+
+  // Global Actions
+  const handleRunFairDistribution = () => {
+    const newAssignments = distributeChoresFairly({
+      choreDefs,
+      members,
+      presence,
+      capacities,
+      weekDates: getCurrentWeekDates(),
+      existingAssignments: choreAssignments,
+    });
+    setChoreAssignments(newAssignments);
+  };
+
+  const handleApplyDefaults = () => {
+    setPresence(generateInitialPresence());
+    setMealAttendances(generateInitialMealAttendances());
+    setCapacities(generateInitialCapacities());
+    handleRunFairDistribution();
+  };
+
+  const handleGenerateShoppingListFromMenu = () => {
+    const newItems: ShoppingItem[] = [...shoppingList];
+
+    mealPlan.forEach((planItem) => {
+      const recipe = recipes.find((r) => r.id === planItem.recipeId);
+      if (!recipe) return;
+
+      recipe.ingredients.forEach((ingr) => {
+        const alreadyExists = newItems.some(
+          (s) => s.item.toLowerCase().includes(ingr.item.toLowerCase())
+        );
+
+        if (!alreadyExists) {
+          newItems.push({
+            id: `shop-gen-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            item: ingr.item,
+            quantity: ingr.amount.split(' ')[0] || '1',
+            unit: ingr.amount.split(' ')[1] || 'adag',
+            category: ingr.category || '🧂 Egyéb élelmiszer',
+            relatedRecipeId: recipe.id,
+            inStock: false,
+            needsBuying: true,
+            purchased: false,
+            note: `${recipe.name} (${planItem.dayOfWeek} ${planItem.mealType})`,
+          });
         }
+      });
+    });
 
-        // Add in-app notification if marked complete
-        if (nextCompleted) {
-          const assignee = members.find((m) => m.id === chore.assignedMemberId);
-          setInAppNotifications((prev) => [
-            {
-              id: `completed-${Date.now()}`,
-              memberId: 'all',
-              title: `✅ Feladat elvégezve: ${chore.title}`,
-              message: `${assignee ? assignee.name : 'Valaki'} elvégezte a feladatot (+${chore.points} pont)!`,
-              timestamp: new Date().toLocaleTimeString('hu-HU', { hour: '2-digit', minute: '2-digit' }),
-              read: false,
-              type: 'task_completed',
-            },
-            ...prev,
-          ]);
-        }
+    setShoppingList(newItems);
+  };
 
+  // Toggle handlers
+  const handleToggleChoreComplete = (assignmentId: string) => {
+    setChoreAssignments((prev) =>
+      prev.map((a) => {
+        if (a.id !== assignmentId) return a;
+        const next = !a.completed;
         return {
-          ...chore,
-          isCompleted: nextCompleted,
-          completedAt,
-          completedByMemberId,
+          ...a,
+          completed: next,
+          completedAt: next ? new Date().toISOString() : undefined,
         };
-      });
-    });
-  };
-
-  const handleAddChore = (
-    choreData: Omit<Chore, 'id' | 'createdAt' | 'isCompleted' | 'completedAt' | 'completedByMemberId' | 'weekId'>
-  ) => {
-    const currentWeek = getWeekId(choreData.dueDate);
-    const newChore: Chore = {
-      ...choreData,
-      id: `chore-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      createdAt: new Date().toISOString(),
-      isCompleted: false,
-      completedAt: null,
-      completedByMemberId: null,
-      weekId: currentWeek,
-    };
-
-    setChores((prev) => [newChore, ...prev]);
-
-    // Send push notification to assigned member about the new chore
-    const assignee = members.find((m) => m.id === choreData.assignedMemberId);
-    if (assignee) {
-      sendBrowserNotification(`Új feladatod van: ${newChore.title}`, {
-        body: `Kiosztva a(z) ${familyName} házimunka tábláján (+${newChore.points} pont).`,
-      });
-
-      setInAppNotifications((prev) => [
-        {
-          id: `new-chore-${Date.now()}`,
-          memberId: assignee.id,
-          title: `Új feladat kiosztva neked: ${newChore.title}`,
-          message: `${newChore.description || 'Elvégzendő feladat'} (+${newChore.points} pont)`,
-          timestamp: new Date().toLocaleTimeString('hu-HU', { hour: '2-digit', minute: '2-digit' }),
-          read: false,
-          type: 'daily_reminder',
-        },
-        ...prev,
-      ]);
-    }
-  };
-
-  const handleDeleteChore = (choreId: string) => {
-    setChores((prev) => prev.filter((c) => c.id !== choreId));
-  };
-
-  const handleAddMember = (
-    memberData: Omit<FamilyMember, 'id' | 'joinedDate' | 'pointsTotal'>
-  ) => {
-    const newMember: FamilyMember = {
-      ...memberData,
-      id: `mem-${Date.now()}`,
-      joinedDate: new Date().toISOString().split('T')[0],
-      pointsTotal: 0,
-    };
-
-    setMembers((prev) => [...prev, newMember]);
-
-    setInAppNotifications((prev) => [
-      {
-        id: `welcome-${newMember.id}`,
-        memberId: 'all',
-        title: `👋 Új családtag csatlakozott!`,
-        message: `${newMember.name} mostantól a család tagja. Üdvözlünk a házimunka csapatban!`,
-        timestamp: new Date().toLocaleTimeString('hu-HU', { hour: '2-digit', minute: '2-digit' }),
-        read: false,
-        type: 'member_joined',
-      },
-      ...prev,
-    ]);
-  };
-
-  const handleRemoveMember = (memberId: string) => {
-    setMembers((prev) => prev.filter((m) => m.id !== memberId));
-    if (activeMemberId === memberId) {
-      setActiveMemberId('all');
-    }
-  };
-
-  const handleSaveEvaluation = (evaluation: WeeklyEvaluation) => {
-    setEvaluations((prev) => {
-      const existsIndex = prev.findIndex((e) => e.weekId === evaluation.weekId);
-      if (existsIndex >= 0) {
-        const copy = [...prev];
-        copy[existsIndex] = evaluation;
-        return copy;
-      }
-      return [evaluation, ...prev];
-    });
-
-    setInAppNotifications((prev) => [
-      {
-        id: `eval-notif-${Date.now()}`,
-        memberId: 'all',
-        title: `🏆 Vasárnapi értékelés elmentve: ${evaluation.title}`,
-        message: `A család elérte a ${evaluation.overallRate}%-os eredményt! Hét hőse: ${evaluation.mvpMemberName}.`,
-        timestamp: new Date().toLocaleTimeString('hu-HU', { hour: '2-digit', minute: '2-digit' }),
-        read: false,
-        type: 'weekly_summary',
-      },
-      ...prev,
-    ]);
-  };
-
-  const handleAddInAppNotification = (notif: InAppNotification) => {
-    setInAppNotifications((prev) => [notif, ...prev]);
-  };
-
-  const handleDismissNotification = (id: string) => {
-    setInAppNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+      })
     );
   };
 
-  const handleClearAllNotifications = () => {
-    setInAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  const handleToggleShoppingItem = (itemId: string) => {
+    setShoppingList((prev) =>
+      prev.map((s) => (s.id === itemId ? { ...s, purchased: !s.purchased } : s))
+    );
   };
 
-  const handleUpdateMemberNotificationTime = (
+  const handleUpdatePresence = (
     memberId: string,
-    time: string,
-    enabled: boolean
+    day: DayOfWeek,
+    field: 'isHome' | 'sleepsHome' | 'arrival' | 'departure' | 'note',
+    value: any
   ) => {
-    setMembers((prev) =>
-      prev.map((m) =>
-        m.id === memberId
-          ? { ...m, notificationTime: time, notificationsEnabled: enabled }
-          : m
-      )
+    setPresence((prev) =>
+      prev.map((p) => {
+        if (p.memberId === memberId && p.dayOfWeek === day) {
+          return { ...p, [field]: value };
+        }
+        return p;
+      })
     );
   };
 
-  // Filtered chores for display
-  const displayedChores = filterChores(chores, {
-    memberId: activeMemberId,
-    status: statusFilter,
-    category: categoryFilter,
-    searchQuery,
-  });
+  const handleToggleMeal = (
+    memberId: string,
+    day: DayOfWeek,
+    mealType: 'wantsLunch' | 'wantsDinner'
+  ) => {
+    setMealAttendances((prev) =>
+      prev.map((a) => {
+        if (a.memberId === memberId && a.dayOfWeek === day) {
+          return { ...a, [mealType]: !a[mealType] };
+        }
+        return a;
+      })
+    );
+  };
+
+  const handleUpdateMealPlan = (planId: string, updates: Partial<WeeklyMealPlanItem>) => {
+    setMealPlan((prev) =>
+      prev.map((p) => (p.id === planId ? { ...p, ...updates } : p))
+    );
+  };
+
+  const handleAddShoppingItem = (item: Omit<ShoppingItem, 'id'>) => {
+    const newItem: ShoppingItem = {
+      ...item,
+      id: `shop-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    };
+    setShoppingList((prev) => [newItem, ...prev]);
+  };
+
+  const handleDeleteShoppingItem = (id: string) => {
+    setShoppingList((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const handleToggleCanCook = (memberId: string) => {
+    setMembers((prev) =>
+      prev.map((m) => (m.id === memberId ? { ...m, canCook: !m.canCook } : m))
+    );
+  };
+
+  const handleToggleMemberActive = (memberId: string) => {
+    setMembers((prev) =>
+      prev.map((m) => (m.id === memberId ? { ...m, active: !m.active } : m))
+    );
+  };
+
+  const handleUpdateMemberNote = (memberId: string, note: string) => {
+    setMembers((prev) =>
+      prev.map((m) => (m.id === memberId ? { ...m, note } : m))
+    );
+  };
+
+  const handleUpdateCapacity = (memberId: string, day: DayOfWeek, minutes: number) => {
+    setCapacities((prev) =>
+      prev.map((c) => {
+        if (c.memberId === memberId && c.dayOfWeek === day) {
+          return { ...c, availableMinutes: minutes };
+        }
+        return c;
+      })
+    );
+  };
+
+  const handleReassignChore = (assignmentId: string, newMemberId: string) => {
+    setChoreAssignments((prev) =>
+      prev.map((a) => (a.id === assignmentId ? { ...a, memberId: newMemberId } : a))
+    );
+  };
+
+  const handleAddRecipeIngredientsToShopping = (recipe: Recipe) => {
+    const newItems: ShoppingItem[] = [...shoppingList];
+    recipe.ingredients.forEach((ingr) => {
+      newItems.push({
+        id: `shop-rec-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        item: ingr.item,
+        quantity: ingr.amount.split(' ')[0] || '1',
+        unit: ingr.amount.split(' ')[1] || 'adag',
+        category: ingr.category || '🧂 Egyéb élelmiszer',
+        relatedRecipeId: recipe.id,
+        inStock: false,
+        needsBuying: true,
+        purchased: false,
+        note: `Receptből: ${recipe.name}`,
+      });
+    });
+    setShoppingList(newItems);
+  };
+
+  const handleAddPantryItem = (item: PantryItem) => {
+    setPantryItems((prev) => [item, ...prev]);
+  };
+
+  const handleTogglePantryStock = (id: string) => {
+    setPantryItems((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, inStock: !p.inStock } : p))
+    );
+  };
+
+  const handleDeletePantryItem = (id: string) => {
+    setPantryItems((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const handleSendPantryToShopping = (pantryItem: PantryItem) => {
+    handleAddShoppingItem({
+      item: pantryItem.item,
+      quantity: pantryItem.minQuantity || '1',
+      unit: 'db',
+      category: pantryItem.category,
+      inStock: false,
+      needsBuying: true,
+      purchased: false,
+      note: 'Kifogyott a kamrából',
+    });
+  };
+
+  const activeMember = members.find((m) => m.id === activeMemberId) || members[0];
+
+  const pageTitles: Record<NotionPageId, { title: string; icon: string }> = {
+    home: { title: 'Főoldal — Családi Otthon', icon: '🏠' },
+    week_plan: { title: 'E Heti Családi Terv', icon: '📅' },
+    presence: { title: 'Otthonlét Mátrix', icon: '📍' },
+    meal_attendance: { title: 'Étkezési Igények (Ebéd & Vacsora)', icon: '🍱' },
+    meal_plan: { title: 'Heti Menü & Főzés Beosztás', icon: '👩‍🍳' },
+    recipes: { title: 'Receptek (20+ családbarát recept)', icon: '📖' },
+    shopping: { title: 'Bevásárlólista', icon: '🛒' },
+    chores: { title: 'Házimunka & Igazságos Beosztás', icon: '🧹' },
+    personal: { title: `Saját Feladataim (${activeMember.name})`, icon: '👤' },
+    pantry: { title: 'Háztartási Készlet', icon: '📦' },
+    mobile_today: { title: 'MA — Mobil Fókusz', icon: '📱' },
+    family_members: { title: 'Családtagok (7 fő)', icon: '👨‍👩‍👧‍👦' },
+  };
 
   return (
-    <div className="min-h-screen bg-slate-50/70 text-slate-800 flex flex-col font-sans">
-      {/* Header */}
-      <Header
-        familyName={familyName}
-        onChangeFamilyName={setFamilyName}
-        members={members}
-        activeMemberId={activeMemberId}
-        onSelectActiveMember={setActiveMemberId}
-        onOpenChoreModal={() => setIsChoreModalOpen(true)}
-        onOpenMembersModal={() => setIsMembersModalOpen(true)}
-        onOpenSundayModal={() => setIsSundayModalOpen(true)}
-        onOpenNotificationsModal={() => setIsNotificationsModalOpen(true)}
-        notifications={inAppNotifications}
-        isSundayToday={isTodaySunday || isSimulatedSunday}
+    <div className="min-h-screen bg-[#fcfcfb] text-slate-800 flex font-sans antialiased">
+      {/* Notion Sidebar Navigation */}
+      <NotionSidebar
+        activePage={activePage}
+        onSelectPage={setActivePage}
+        isOpenMobile={isMobileSidebarOpen}
+        onToggleMobile={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+        selectedMemberName={activeMember.name}
       />
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Family Member Quick Avatars Strip */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
-          <button
-            onClick={() => setActiveMemberId('all')}
-            className={`px-3 py-2 rounded-2xl border flex items-center gap-2 text-xs font-bold transition-all shrink-0 cursor-pointer ${
-              activeMemberId === 'all'
-                ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
-                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            <span>Közös felület ({chores.length})</span>
-          </button>
-
-          {members.map((member) => {
-            const memberChoresCount = chores.filter((c) => c.assignedMemberId === member.id).length;
-            const isSelected = activeMemberId === member.id;
-
-            return (
-              <button
-                key={member.id}
-                onClick={() => setActiveMemberId(member.id)}
-                className={`px-3 py-1.5 rounded-2xl border flex items-center gap-2.5 text-xs font-semibold transition-all shrink-0 cursor-pointer ${
-                  isSelected
-                    ? 'ring-2 ring-indigo-500 bg-white border-transparent shadow-xs'
-                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
-                }`}
-                style={{
-                  borderLeftColor: member.color,
-                  borderLeftWidth: 4,
-                }}
-              >
-                <span className="text-xl">{member.avatar}</span>
-                <div className="text-left">
-                  <p className="font-bold text-slate-900 leading-tight">{member.name}</p>
-                  <p className="text-[11px] text-slate-500">
-                    {memberChoresCount} feladat • {member.pointsTotal || 0}p
-                  </p>
-                </div>
-              </button>
-            );
-          })}
-
-          <button
-            onClick={() => setIsMembersModalOpen(true)}
-            className="px-3 py-2 rounded-2xl border border-dashed border-slate-300 hover:border-indigo-400 bg-white/50 text-slate-500 hover:text-indigo-600 text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Új tag felvétele</span>
-          </button>
-        </div>
-
-        {/* Family Summary & KPIs Banner */}
-        <FamilySummaryBanner
-          familyName={familyName}
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top Header */}
+        <NotionHeader
+          onToggleMobileMenu={() => setIsMobileSidebarOpen(true)}
+          pageTitle={pageTitles[activePage].title}
+          pageIcon={pageTitles[activePage].icon}
           members={members}
-          chores={chores}
           activeMemberId={activeMemberId}
-          statusFilter={statusFilter}
-          onChangeStatusFilter={setStatusFilter}
-          categoryFilter={categoryFilter}
-          onChangeCategoryFilter={setCategoryFilter}
-          searchQuery={searchQuery}
-          onChangeSearchQuery={setSearchQuery}
-          onOpenSundayModal={() => setIsSundayModalOpen(true)}
-          isSundayToday={isTodaySunday}
-          onToggleSimulatedSunday={() => setIsSimulatedSunday(!isSimulatedSunday)}
-          isSimulatedSunday={isSimulatedSunday}
+          onSelectMember={setActiveMemberId}
+          onApplyDefaults={handleApplyDefaults}
+          onRunFairDistribution={handleRunFairDistribution}
+          onGenerateShoppingList={handleGenerateShoppingListFromMenu}
         />
 
-        {/* Chores Grid / List */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-600 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              {activeMemberId === 'all'
-                ? 'Összes kiadott családi feladat'
-                : `${members.find((m) => m.id === activeMemberId)?.name} feladatai`}
-              <span className="text-xs font-normal text-slate-400">
-                ({displayedChores.length} feladat)
-              </span>
-            </h2>
-
-            <button
-              onClick={() => setIsChoreModalOpen(true)}
-              className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1"
-            >
-              <Plus className="w-3.5 h-3.5 stroke-[3]" />
-              Új feladat hozzáadása
-            </button>
-          </div>
-
-          {displayedChores.length === 0 ? (
-            <div className="p-12 text-center bg-white rounded-2xl border border-dashed border-slate-300 space-y-3">
-              <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mx-auto">
-                <Inbox className="w-6 h-6" />
-              </div>
-              <h3 className="text-sm font-bold text-slate-700">
-                Nincs megjeleníthető feladat ebben a nézetben
-              </h3>
-              <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                Minden feladat készen van, vagy módosítsd a szűrőket. Adj hozzá új házimunkát a családtagokhoz!
-              </p>
-              <button
-                onClick={() => setIsChoreModalOpen(true)}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
-              >
-                + Új feladat kiosztása
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-3.5">
-              {displayedChores.map((chore) => {
-                const assignedMember = members.find((m) => m.id === chore.assignedMemberId);
-                const currentActiveMember =
-                  activeMemberId !== 'all'
-                    ? members.find((m) => m.id === activeMemberId)
-                    : undefined;
-
-                return (
-                  <ChoreCard
-                    key={chore.id}
-                    chore={chore}
-                    assignedMember={assignedMember}
-                    currentActiveMember={currentActiveMember}
-                    onToggleComplete={handleToggleCompleteChore}
-                    onDeleteChore={handleDeleteChore}
-                  />
-                );
-              })}
-            </div>
+        {/* Dynamic Page Views */}
+        <main className="flex-1 overflow-y-auto pb-16">
+          {activePage === 'home' && (
+            <DashboardView
+              members={members}
+              presence={presence}
+              mealAttendances={mealAttendances}
+              mealPlan={mealPlan}
+              recipes={recipes}
+              shoppingList={shoppingList}
+              choreAssignments={choreAssignments}
+              activeMemberId={activeMemberId}
+              onToggleChoreComplete={handleToggleChoreComplete}
+              onToggleShoppingItem={handleToggleShoppingItem}
+              onNavigatePage={setActivePage}
+              onSelectMember={setActiveMemberId}
+            />
           )}
-        </div>
-      </main>
 
-      {/* Footer */}
-      <footer className="mt-auto border-t border-slate-200/80 bg-white py-4 px-4 text-center text-xs text-slate-500">
-        <p>
-          {familyName} • Családi Házimunka Kiosztó Rendszer • Heti vasárnapi kiértékelés & Napi push értesítések
-        </p>
-      </footer>
+          {activePage === 'week_plan' && (
+            <WeeklyOverviewView
+              members={members}
+              presence={presence}
+              mealAttendances={mealAttendances}
+              mealPlan={mealPlan}
+              recipes={recipes}
+              shoppingList={shoppingList}
+              assignments={choreAssignments}
+            />
+          )}
 
-      {/* Floating In-App Push Notification Toasts */}
-      <InAppNotificationToast
-        notifications={inAppNotifications}
-        onDismiss={handleDismissNotification}
-        onClearAll={handleClearAllNotifications}
-      />
+          {activePage === 'presence' && (
+            <PresenceMatrixView
+              members={members}
+              presence={presence}
+              onUpdatePresence={handleUpdatePresence}
+              onResetDefaults={handleApplyDefaults}
+            />
+          )}
 
-      {/* Modals */}
-      <ChoreModal
-        isOpen={isChoreModalOpen}
-        onClose={() => setIsChoreModalOpen(false)}
-        members={members}
-        onAddChore={handleAddChore}
-        initialMemberId={activeMemberId !== 'all' ? activeMemberId : undefined}
-      />
+          {activePage === 'meal_attendance' && (
+            <MealAttendanceView
+              members={members}
+              mealAttendances={mealAttendances}
+              onToggleMeal={handleToggleMeal}
+              onResetDefaults={handleApplyDefaults}
+            />
+          )}
 
-      <MemberManagementModal
-        isOpen={isMembersModalOpen}
-        onClose={() => setIsMembersModalOpen(false)}
-        members={members}
-        onAddMember={handleAddMember}
-        onRemoveMember={handleRemoveMember}
-      />
+          {activePage === 'meal_plan' && (
+            <MealPlanAndCookingView
+              mealPlan={mealPlan}
+              recipes={recipes}
+              members={members}
+              mealAttendances={mealAttendances}
+              onUpdateMealPlan={handleUpdateMealPlan}
+              onOpenRecipeModal={setSelectedRecipeModal}
+            />
+          )}
 
-      <SundayEvaluationModal
-        isOpen={isSundayModalOpen}
-        onClose={() => setIsSundayModalOpen(false)}
-        members={members}
-        chores={chores}
-        evaluations={evaluations}
-        onSaveEvaluation={handleSaveEvaluation}
-      />
+          {activePage === 'recipes' && (
+            <RecipeDatabaseView
+              recipes={recipes}
+              onAddRecipeIngredientsToShopping={handleAddRecipeIngredientsToShopping}
+              selectedModalRecipe={selectedRecipeModal}
+              onSelectModalRecipe={setSelectedRecipeModal}
+            />
+          )}
 
-      <PushNotificationModal
-        isOpen={isNotificationsModalOpen}
-        onClose={() => setIsNotificationsModalOpen(false)}
-        members={members}
-        chores={chores}
-        onAddInAppNotification={handleAddInAppNotification}
-        onUpdateMemberNotificationTime={handleUpdateMemberNotificationTime}
-      />
+          {activePage === 'shopping' && (
+            <ShoppingListView
+              shoppingList={shoppingList}
+              members={members}
+              onTogglePurchased={handleToggleShoppingItem}
+              onAddItem={handleAddShoppingItem}
+              onDeleteItem={handleDeleteShoppingItem}
+              onGenerateFromMenu={handleGenerateShoppingListFromMenu}
+              onToggleInStock={() => {}}
+            />
+          )}
+
+          {activePage === 'chores' && (
+            <ChoresView
+              choreDefs={choreDefs}
+              assignments={choreAssignments}
+              members={members}
+              capacities={capacities}
+              onToggleAssignmentComplete={handleToggleChoreComplete}
+              onRunFairDistribution={handleRunFairDistribution}
+              onUpdateCapacity={handleUpdateCapacity}
+              onReassignChore={handleReassignChore}
+            />
+          )}
+
+          {activePage === 'personal' && (
+            <PersonalView
+              members={members}
+              activeMemberId={activeMemberId}
+              onSelectMember={setActiveMemberId}
+              assignments={choreAssignments}
+              mealPlan={mealPlan}
+              mealAttendances={mealAttendances}
+              presence={presence}
+              recipes={recipes}
+              onToggleChoreComplete={handleToggleChoreComplete}
+            />
+          )}
+
+          {activePage === 'mobile_today' && (
+            <MobileTodayView
+              members={members}
+              presence={presence}
+              mealAttendances={mealAttendances}
+              mealPlan={mealPlan}
+              recipes={recipes}
+              shoppingList={shoppingList}
+              choreAssignments={choreAssignments}
+              activeMemberId={activeMemberId}
+              onSelectMember={setActiveMemberId}
+              onToggleChoreComplete={handleToggleChoreComplete}
+              onToggleShoppingItem={handleToggleShoppingItem}
+            />
+          )}
+
+          {activePage === 'family_members' && (
+            <FamilyMembersView
+              members={members}
+              onToggleCanCook={handleToggleCanCook}
+              onToggleActive={handleToggleMemberActive}
+              onUpdateNote={handleUpdateMemberNote}
+            />
+          )}
+
+          {activePage === 'pantry' && (
+            <PantryView
+              pantryItems={pantryItems}
+              onToggleInStock={handleTogglePantryStock}
+              onAddItem={handleAddPantryItem}
+              onDeleteItem={handleDeletePantryItem}
+              onSendLowStockToShopping={handleSendPantryToShopping}
+            />
+          )}
+        </main>
+      </div>
     </div>
   );
 }
